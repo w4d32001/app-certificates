@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { FileUp, Download, AlertCircle, X, Loader2 } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { FileUp, Download, AlertCircle, X, Loader2, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 import {
@@ -54,7 +54,20 @@ export default function CertificadosPage() {
         footerText: ''
     });
 
+    const [visualConfig, setVisualConfig] = useState({
+        nameY: 44,
+        nameFontSize: 48,
+        dateY: 68,
+        dateFontSize: 18,
+        dateX: 85
+    });
+    const [previewName, setPreviewName] = useState('JUAN CARLOS PÉREZ GARCÍA');
+    const [showVisualConfig, setShowVisualConfig] = useState(false);
+    const [previewImage, setPreviewImage] = useState<string | null>(null);
+    const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
     const showConfirmDialog = (
         title: string,
@@ -68,6 +81,83 @@ export default function CertificadosPage() {
             onConfirm
         });
     };
+
+    useEffect(() => {
+        if (!certificateTemplate || !showVisualConfig) return;
+
+        if (previewTimeoutRef.current) {
+            clearTimeout(previewTimeoutRef.current);
+        }
+
+        previewTimeoutRef.current = setTimeout(() => {
+            generatePreview();
+        }, 500);
+
+        return () => {
+            if (previewTimeoutRef.current) {
+                clearTimeout(previewTimeoutRef.current);
+            }
+        };
+    }, [visualConfig, previewName, certificateTemplate, showVisualConfig, config.issueLocation, config.issueDate]);
+
+    const generatePreview = async () => {
+        if (!previewCanvasRef.current || !certificateTemplate) return;
+
+        try {
+            const canvas = previewCanvasRef.current;
+            const ctx = canvas.getContext('2d')!;
+
+            const img = new Image();
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+                img.src = certificateTemplate;
+            });
+
+            canvas.width = img.width;
+            canvas.height = img.height;
+
+            ctx.drawImage(img, 0, 0);
+
+            const centerX = canvas.width / 2;
+
+            ctx.fillStyle = '#000000';
+            ctx.font = `bold ${visualConfig.nameFontSize}px Arial`;
+            ctx.textAlign = 'center';
+            const nameYPos = (canvas.height * visualConfig.nameY) / 100;
+            ctx.fillText(previewName.toUpperCase(), centerX, nameYPos);
+
+            if (config.issueLocation && config.issueDate) {
+                ctx.textAlign = 'right';
+                ctx.font = `${visualConfig.dateFontSize}px Arial`;
+                const dateXPos = (canvas.width * visualConfig.dateX) / 100;
+                const dateYPos = (canvas.height * visualConfig.dateY) / 100;
+                ctx.fillText(`${config.issueLocation}, ${config.issueDate}`, dateXPos, dateYPos);
+            }
+
+            setPreviewImage(canvas.toDataURL('image/png'));
+        } catch (error) {
+            console.error('Error generating preview:', error);
+        }
+    };
+
+    const saveVisualConfig = () => {
+        localStorage.setItem('certificateVisualConfig', JSON.stringify(visualConfig));
+        toast.success('Configuración guardada', {
+            description: 'Los ajustes se aplicarán a todos los certificados'
+        });
+    };
+
+    useEffect(() => {
+        const saved = localStorage.getItem('certificateVisualConfig');
+        if (saved) {
+            try {
+                setVisualConfig(JSON.parse(saved));
+            } catch (e) {
+                console.error('Error loading config:', e);
+            }
+        }
+    }, []);
 
     const normalizeColumnName = (name: string): string => {
         return name
@@ -274,7 +364,12 @@ export default function CertificadosPage() {
 
         try {
             const generator = new CertificateGenerator(canvasRef.current);
-            const imgData = await generator.generateFromTemplate(participant, config, certificateTemplate);
+            const imgData = await generator.generateFromTemplate(
+                participant,
+                config,
+                certificateTemplate,
+                visualConfig 
+            );
             setCurrentPreview({ nombre: participant.nombres_apellidos, imgData });
         } catch (error: any) {
             toast.error('Error al generar vista previa', {
@@ -301,7 +396,12 @@ export default function CertificadosPage() {
 
         try {
             const generator = new CertificateGenerator(canvasRef.current);
-            const imgData = await generator.generateFromTemplate(participant, config, certificateTemplate);
+            const imgData = await generator.generateFromTemplate(
+                participant,
+                config,
+                certificateTemplate,
+                visualConfig  
+            );
             const link = document.createElement('a');
             link.download = `certificado_${participant.nombres_apellidos.replace(/\s+/g, '_')}.png`;
             link.href = imgData;
@@ -319,6 +419,7 @@ export default function CertificadosPage() {
             setLoadingMessage('');
         }
     };
+
 
     const downloadAll = async () => {
         setIsLoading(true);
@@ -362,7 +463,12 @@ export default function CertificadosPage() {
             }
 
             const generator = new CertificateGenerator(canvasRef.current);
-            const imgData = await generator.generateFromTemplate(participant, config, certificateTemplate);
+            const imgData = await generator.generateFromTemplate(
+                participant,
+                config,
+                certificateTemplate,
+                visualConfig 
+            );
             const blob = await (await fetch(imgData)).blob();
 
             const formData = new FormData();
@@ -370,14 +476,14 @@ export default function CertificadosPage() {
             formData.append('email', participant.correo);
             formData.append('name', participant.nombres_apellidos);
             formData.append('eventTitle', config.eventTitle);
-            formData.append('certificateBase64', imgData); // NUEVO: Enviar base64 completo
+            formData.append('certificateBase64', imgData);
             formData.append('participantData', JSON.stringify({
                 ...participant,
                 eventId: eventId,
                 eventConfig: config,
                 logos: logos,
                 signatures: signatures,
-                templateImage: certificateTemplate // NUEVO: Enviar plantilla
+                templateImage: certificateTemplate
             }));
 
             const response = await fetch('/api/send-certificate', {
@@ -415,55 +521,56 @@ export default function CertificadosPage() {
     };
 
     const sendBulkEmails = async (selectedIds: string[]) => {
-        if (selectedIds.length === 0) {
-            toast.error('Selecciona al menos un participante');
-            return;
-        }
+    if (selectedIds.length === 0) {
+        toast.error('Selecciona al menos un participante');
+        return;
+    }
 
-        showConfirmDialog(
-            '¿Enviar certificados?',
-            `Se enviarán ${selectedIds.length} certificado(s) por email. Se guardarán en la base de datos al enviar. Esto puede tardar varios minutos.`,
-            async () => {
-                setIsLoading(true);
-                const results = { success: 0, failed: 0, errors: [] as string[] };
+    showConfirmDialog(
+        '¿Enviar certificados?',
+        `Se enviarán ${selectedIds.length} certificado(s) por email. Se guardarán en la base de datos al enviar. Esto puede tardar varios minutos.`,
+        async () => {
+            setIsLoading(true);
+            const results = { success: 0, failed: 0, errors: [] as string[] };
 
-                for (let i = 0; i < selectedIds.length; i++) {
-                    const id = selectedIds[i];
-                    const participant = participants.find(p => p.id === id);
+            for (let i = 0; i < selectedIds.length; i++) {
+                const id = selectedIds[i];
+                const participant = participants.find(p => p.id === id);
 
-                    setLoadingMessage(`Enviando ${i + 1} de ${selectedIds.length}: ${participant?.nombres_apellidos || ''}...`);
+                setLoadingMessage(`Enviando ${i + 1} de ${selectedIds.length}: ${participant?.nombres_apellidos || ''}...`);
 
-                    try {
-                        await sendEmail(id);
-                        results.success++;
-                        await new Promise(resolve => setTimeout(resolve, 1500));
-                    } catch (error: any) {
-                        results.failed++;
-                        const p = participants.find(p => p.id === id);
-                        results.errors.push(`${p?.nombres_apellidos}: ${error.message}`);
-                    }
-                }
-
-                setIsLoading(false);
-                setLoadingMessage('');
-
-                if (results.failed > 0) {
-                    toast.error('Envío completado con errores', {
-                        description: `Enviados: ${results.success}, Fallidos: ${results.failed}`
-                    });
-                } else {
-                    toast.success('¡Todos los certificados enviados!', {
-                        description: `${results.success} de ${selectedIds.length} enviados correctamente`
-                    });
+                try {
+                    await sendEmail(id);
+                    results.success++;
+                    
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                } catch (error: any) {
+                    results.failed++;
+                    const p = participants.find(p => p.id === id);
+                    results.errors.push(`${p?.nombres_apellidos}: ${error.message}`);
                 }
             }
-        );
-    };
+
+            setIsLoading(false);
+            setLoadingMessage('');
+
+            if (results.failed > 0) {
+                toast.error('Envío completado con errores', {
+                    description: `Enviados: ${results.success}, Fallidos: ${results.failed}`
+                });
+            } else {
+                toast.success('¡Todos los certificados enviados!', {
+                    description: `${results.success} de ${selectedIds.length} enviados correctamente`
+                });
+            }
+        }
+    );
+};
 
     return (
         <>
             {isLoading && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100]">
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-100">
                     <div className="bg-white rounded-lg p-8 flex flex-col items-center gap-4 shadow-2xl">
                         <Loader2 className="w-12 h-12 animate-spin text-blue-600" />
                         <p className="text-lg font-semibold text-gray-800">{loadingMessage}</p>
@@ -473,9 +580,11 @@ export default function CertificadosPage() {
 
             <div className="min-h-screen bg-white p-8">
                 <div className="max-w-7xl mx-auto">
-                    <h1 className="text-4xl font-bold text-amber-900 mb-8 text-center">
-                        Sistema de Generación de Certificados - Poder Judicial
-                    </h1>
+                    <div className="flex items-center justify-between mb-8">
+                        <h1 className="text-4xl font-bold text-amber-900">
+                            Sistema de Generación de Certificados - Poder Judicial
+                        </h1>
+                    </div>
 
                     <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6 rounded">
                         <div className="flex items-start">
@@ -527,6 +636,7 @@ export default function CertificadosPage() {
                                             const reader = new FileReader();
                                             reader.onload = (event) => {
                                                 setCertificateTemplate(event.target?.result as string);
+                                                setShowVisualConfig(true);
                                                 toast.success('Plantilla cargada correctamente');
                                             };
                                             reader.readAsDataURL(file);
@@ -538,21 +648,114 @@ export default function CertificadosPage() {
 
                             {certificateTemplate && (
                                 <div className="relative">
-                                    <p className="text-sm text-green-600 font-semibold mb-2">✓ Plantilla cargada</p>
-                                    <img
-                                        src={certificateTemplate}
-                                        alt="Plantilla"
-                                        className="w-full max-w-md mx-auto border-2 border-gray-300 rounded"
-                                    />
-                                    <button
-                                        onClick={() => {
-                                            setCertificateTemplate(null);
-                                            toast.info('Plantilla eliminada');
-                                        }}
-                                        className="absolute top-0 right-0 bg-red-600 text-white p-2 rounded-full hover:bg-red-700"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <p className="text-sm text-green-600 font-semibold">✓ Plantilla cargada</p>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => setShowVisualConfig(!showVisualConfig)}
+                                                className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 text-sm font-semibold"
+                                            >
+                                                <Settings className="w-4 h-4" />
+                                                {showVisualConfig ? 'Ocultar' : 'Configurar'} Posiciones
+                                                {showVisualConfig ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    setCertificateTemplate(null);
+                                                    setShowVisualConfig(false);
+                                                    toast.info('Plantilla eliminada');
+                                                }}
+                                                className="bg-red-600 text-white p-2 rounded-lg hover:bg-red-700"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {showVisualConfig && (
+                                        <div className="bg-linear-to-br from-purple-50 to-blue-50 rounded-xl p-6 mb-4 border-2 border-purple-200">
+                                            <div className="grid lg:grid-cols-2 gap-6">
+                                                <div className="space-y-4">
+                                                    <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                        <h3 className="font-bold text-gray-800 mb-3">Nombre de Prueba</h3>
+                                                        <input
+                                                            type="text"
+                                                            value={previewName}
+                                                            onChange={(e) => setPreviewName(e.target.value)}
+                                                            className="w-full px-3 py-2 border-2 border-purple-200 rounded-lg focus:outline-none focus:border-purple-500"
+                                                            placeholder="Nombre de ejemplo"
+                                                        />
+                                                    </div>
+
+                                                    <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                        <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                                            <span className="w-3 h-3 bg-blue-600 rounded-full"></span>
+                                                            Configuración del Nombre
+                                                        </h3>
+
+                                                        <div className="space-y-3">
+                                                            <div>
+                                                                <label className="flex justify-between text-sm font-medium text-gray-700 mb-1">
+                                                                    <span>Posición Vertical</span>
+                                                                    <span className="text-purple-600 font-bold">{visualConfig.nameY}%</span>
+                                                                </label>
+                                                                <input
+                                                                    type="range"
+                                                                    min="20"
+                                                                    max="80"
+                                                                    value={visualConfig.nameY}
+                                                                    onChange={(e) => setVisualConfig({ ...visualConfig, nameY: Number(e.target.value) })}
+                                                                    className="w-full h-2 bg-purple-200 rounded-lg cursor-pointer"
+                                                                />
+                                                            </div>
+
+                                                            <div>
+                                                                <label className="flex justify-between text-sm font-medium text-gray-700 mb-1">
+                                                                    <span>Tamaño de Fuente</span>
+                                                                    <span className="text-purple-600 font-bold">{visualConfig.nameFontSize}px</span>
+                                                                </label>
+                                                                <input
+                                                                    type="range"
+                                                                    min="24"
+                                                                    max="80"
+                                                                    value={visualConfig.nameFontSize}
+                                                                    onChange={(e) => setVisualConfig({ ...visualConfig, nameFontSize: Number(e.target.value) })}
+                                                                    className="w-full h-2 bg-purple-200 rounded-lg cursor-pointer"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                    <h3 className="font-bold text-gray-800 mb-3">Vista Previa en Tiempo Real</h3>
+                                                    {previewImage ? (
+                                                        <img
+                                                            src={previewImage}
+                                                            alt="Preview"
+                                                            className="w-full border-2 border-gray-300 rounded-lg shadow-lg"
+                                                        />
+                                                    ) : (
+                                                        <div className="flex items-center justify-center h-64 bg-gray-100 rounded-lg">
+                                                            <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+                                                        </div>
+                                                    )}
+                                                    <div className="mt-3 p-3 bg-gray-50 rounded-lg text-xs text-gray-600">
+                                                        <p className="font-semibold mb-1">💡 Los cambios se actualizan automáticamente</p>
+                                                        <p>Mueve los controles para ajustar las posiciones</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {!showVisualConfig && (
+                                        <img
+                                            src={certificateTemplate}
+                                            alt="Plantilla"
+                                            className="w-full max-w-md mx-auto border-2 border-gray-300 rounded"
+                                        />
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -628,6 +831,7 @@ export default function CertificadosPage() {
                     )}
 
                     <canvas ref={canvasRef} style={{ display: 'none' }} />
+                    <canvas ref={previewCanvasRef} style={{ display: 'none' }} />
                 </div>
             </div>
 

@@ -1,5 +1,13 @@
 import { Config, Participant, Logos, Signature } from '@/types/certificate';
 
+interface VisualConfig {
+  nameY: number;
+  nameFontSize: number;
+  dateY: number;
+  dateFontSize: number;
+  dateX: number;
+}
+
 export class CertificateGenerator {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -21,49 +29,56 @@ export class CertificateGenerator {
 
   /**
    * Genera el certificado escribiendo sobre una plantilla existente
+   * @param participant - Datos del participante
+   * @param config - Configuración del evento
+   * @param templateSrc - URL de la imagen de la plantilla
+   * @param visualConfig - Configuración de posiciones y tamaños (opcional)
    */
   async generateFromTemplate(
     participant: Participant,
     config: Config,
-    templateSrc: string
+    templateSrc: string,
+    visualConfig?: VisualConfig
   ): Promise<string> {
-    // Cargar la imagen de la plantilla
+    const defaultConfig: VisualConfig = {
+      nameY: 44,
+      nameFontSize: 48,
+      dateY: 68,
+      dateFontSize: 18,
+      dateX: 85
+    };
+
+    const vc = visualConfig || defaultConfig;
+
     const templateImg = await this.loadImage(templateSrc);
 
-    // Ajustar el canvas al tamaño de la plantilla
     this.canvas.width = templateImg.width;
     this.canvas.height = templateImg.height;
 
-    // Dibujar la plantilla como fondo
     this.ctx.drawImage(templateImg, 0, 0);
 
-    // ====== CONFIGURACIÓN DE POSICIONES ======
     const centerX = this.canvas.width / 2;
 
-    // Posición del nombre (ajusta según tu plantilla)
-    const nameY = this.canvas.height * 0.44;
+    const nameY = (this.canvas.height * vc.nameY) / 100;
+    const dateY = (this.canvas.height * vc.dateY) / 100;
+    const dateX = (this.canvas.width * vc.dateX) / 100;
 
-    // Posición de la fecha
-    const dateY = this.canvas.height * 0.68;
-
-    // Posición del QR (esquina inferior izquierda)
     const qrSize = 120;
     const qrX = 80;
     const qrY = this.canvas.height - qrSize - 50;
 
-    // ====== ESCRIBIR NOMBRE DEL PARTICIPANTE ======
     this.ctx.fillStyle = '#000000';
-    this.ctx.font = 'bold 48px Arial';
+    this.ctx.font = `bold ${vc.nameFontSize}px Arial`;
     this.ctx.textAlign = 'center';
     this.ctx.fillText(participant.nombres_apellidos.toUpperCase(), centerX, nameY);
 
-    // ====== ESCRIBIR FECHA ======
-    this.ctx.textAlign = 'right';
-    this.ctx.font = '18px Arial';
-    this.ctx.fillStyle = '#000000';
-    this.ctx.fillText(`${config.issueLocation}, ${config.issueDate}`, this.canvas.width - 130, dateY);
+    if (config.issueLocation && config.issueDate) {
+      this.ctx.textAlign = 'right';
+      this.ctx.font = `${vc.dateFontSize}px Arial`;
+      this.ctx.fillStyle = '#000000';
+      this.ctx.fillText(`${config.issueLocation}, ${config.issueDate}`, dateX, dateY);
+    }
 
-    // ====== GENERAR Y COLOCAR QR CODE ======
     if (participant.qr_code) {
       try {
         const QRCode = (await import('qrcode')).default;
@@ -77,18 +92,15 @@ export class CertificateGenerator {
         });
         const qrImg = await this.loadImage(qrDataUrl);
 
-        // Fondo blanco para el QR
         this.ctx.fillStyle = '#FFFFFF';
         this.ctx.fillRect(qrX - 5, qrY - 5, qrSize + 10, qrSize + 10);
 
         // Dibujar QR
         this.ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
 
-        // Texto debajo del QR
         this.ctx.fillStyle = '#000000';
         this.ctx.font = 'bold 12px Arial';
-        this.ctx.textAlign = 'center';
-        this.ctx.fillText('Escanea para verificar', qrX + qrSize / 2, qrY + qrSize + 20);
+        this.ctx.textAlign = 'center';;
 
       } catch (error) {
         console.error('Error generating QR:', error);
